@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -328,10 +329,17 @@ func wrappedAs(line string) string {
 			continue
 		}
 		base := fields[i-1]
-		if j := strings.LastIndexByte(base, '/'); j >= 0 {
+		seps := "/"
+		if windowsArgs {
+			seps = `/\`
+		}
+		if j := strings.LastIndexAny(base, seps); j >= 0 {
 			base = base[j+1:]
 		}
-		if base != "berth" {
+		if windowsArgs && len(base) > 4 && strings.EqualFold(base[len(base)-4:], ".exe") {
+			base = base[:len(base)-4]
+		}
+		if base != "berth" && (!windowsArgs || !strings.EqualFold(base, "berth")) {
 			continue
 		}
 		return fields[i+2]
@@ -339,11 +347,20 @@ func wrappedAs(line string) string {
 	return ""
 }
 
+// windowsArgs is whether llama-swap splits a cmd the Windows way: it parses
+// with its host's rules (shlex.Windows there), where a backslash is a path
+// separator and only double quotes group.
+var windowsArgs = runtime.GOOS == "windows"
+
 // shellFields splits a line into shell words: whitespace outside quotes
 // separates, single and double quotes group, and a backslash escapes the next
-// character outside single quotes. It is deliberately small: it only reads
-// wrapper lines this package and its operators write.
+// character outside single quotes. On Windows the line follows windowsFields.
+// It is deliberately small: it only reads wrapper lines this package and its
+// operators write.
 func shellFields(line string) []string {
+	if windowsArgs {
+		return windowsFields(line)
+	}
 	var fields []string
 	var cur strings.Builder
 	open := byte(0)
@@ -386,12 +403,92 @@ func shellFields(line string) []string {
 }
 
 // shellWord quotes a word only when the shell would otherwise split or mangle
-// it; the common names and paths pass through readable.
+// it; the common names and paths pass through readable. On Windows the word
+// follows windowsWord.
 func shellWord(s string) string {
+	if windowsArgs {
+		return windowsWord(s)
+	}
 	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`;&|<>()*?[]{}$!#~") {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// windowsFields splits a line under the Windows command-line rules llama-swap
+// uses there: whitespace outside double quotes separates, double quotes
+// group, single quotes are plain characters, and backslashes are literal
+// except in a run that ends at a double quote: 2n of them are n backslashes
+// and the quote groups, 2n+1 are n backslashes and a literal quote.
+func windowsFields(line string) []string {
+	var fields []string
+	var cur strings.Builder
+	open, quoted := false, false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		switch {
+		case ch == '\\':
+			n := 0
+			for i < len(line) && line[i] == '\\' {
+				n++
+				i++
+			}
+			if i < len(line) && line[i] == '"' {
+				cur.WriteString(strings.Repeat(`\`, n/2))
+				if n%2 == 1 {
+					cur.WriteByte('"')
+					continue
+				}
+				open, quoted = !open, true
+				continue
+			}
+			cur.WriteString(strings.Repeat(`\`, n))
+			i--
+		case ch == '"':
+			open, quoted = !open, true
+		case !open && (ch == ' ' || ch == '\t'):
+			if cur.Len() > 0 || quoted {
+				fields = append(fields, cur.String())
+			}
+			cur.Reset()
+			quoted = false
+		default:
+			cur.WriteByte(ch)
+		}
+	}
+	if cur.Len() > 0 || quoted {
+		fields = append(fields, cur.String())
+	}
+	return fields
+}
+
+// windowsWord quotes a word for the Windows rules only when whitespace or a
+// double quote would split it: D:\AI\berth.exe passes through, a path with a
+// space is double-quoted, and a backslash run before a quote is doubled so it
+// stays literal.
+func windowsWord(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n\"") {
+		return s
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			slashes++
+			continue
+		case '"':
+			b.WriteString(strings.Repeat(`\`, 2*slashes+1))
+		default:
+			b.WriteString(strings.Repeat(`\`, slashes))
+		}
+		slashes = 0
+		b.WriteByte(s[i])
+	}
+	b.WriteString(strings.Repeat(`\`, 2*slashes))
+	b.WriteByte('"')
+	return b.String()
 }
 
 // roster is the ordered model list of a llama-swap config, from a real YAML

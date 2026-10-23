@@ -293,3 +293,73 @@ func TestWriteBacksUpAndReplaces(t *testing.T) {
 		t.Errorf("Write on a clean result = (%q, %v), want (\"\", nil)", b, err)
 	}
 }
+
+// TestMain pins the POSIX rules the fixtures are written in, on every OS;
+// a test that wants the Windows rules opts in with withWindowsArgs.
+func TestMain(m *testing.M) {
+	windowsArgs = false
+	os.Exit(m.Run())
+}
+
+// withWindowsArgs runs a test under the Windows command-line rules on any
+// OS, the way llama-swap splits a cmd on a Windows host.
+func withWindowsArgs(t *testing.T) {
+	t.Helper()
+	was := windowsArgs
+	windowsArgs = true
+	t.Cleanup(func() { windowsArgs = was })
+}
+
+// On Windows the wrapper names berth by a backslash path, often with a
+// space in it. The line must read back as the same words under the rules
+// llama-swap splits with there, and a second pass must find it wired.
+func TestLlamaSwapWindowsPaths(t *testing.T) {
+	withWindowsArgs(t)
+	for _, bin := range []string{`D:\AI\berth\bin\berth.exe`, `D:\AI Stuff\berth\bin\berth.exe`, `C:\Tools\BERTH.EXE`} {
+		o := options()
+		o.Bin = bin
+		r, err := LlamaSwap(writeTemp(t, fixture), o)
+		if err != nil {
+			t.Fatalf("%s: %v", bin, err)
+		}
+		if r.Count("add") != 2 {
+			t.Fatalf("%s: add = %d, want 2", bin, r.Count("add"))
+		}
+		line := wrapperLine("Beta 9B", o, 0, "")
+		if strings.Contains(line, "'") {
+			t.Errorf("%s: wrapper line uses POSIX quotes: %s", bin, line)
+		}
+		if f := shellFields(line); len(f) < 4 || f[0] != bin || f[3] != "Beta 9B" {
+			t.Errorf("%s: wrapper line reads back as %q", bin, f)
+		}
+		again, err := LlamaSwap(writeTemp(t, r.NewContent()), o)
+		if err != nil {
+			t.Fatalf("%s: second pass: %v", bin, err)
+		}
+		if again.Changed {
+			t.Errorf("%s: second pass wants changes: %+v", bin, again.Models)
+		}
+	}
+}
+
+func TestWindowsFields(t *testing.T) {
+	cases := map[string][]string{
+		`D:\AI\berth.exe run --as x`:       {`D:\AI\berth.exe`, "run", "--as", "x"},
+		`"D:\AI Stuff\berth.exe" run`:      {`D:\AI Stuff\berth.exe`, "run"},
+		`"C:\dir\\" next`:                  {`C:\dir\`, "next"},
+		`a\"b 'c d'`:                       {`a"b`, "'c", "d'"},
+		`"" x`:                             {"", "x"},
+		`"say \"hi\"" \server\share\a.exe`: {`say "hi"`, `\server\share\a.exe`},
+	}
+	for in, want := range cases {
+		got := windowsFields(in)
+		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Errorf("windowsFields(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, w := range []string{`D:\AI\berth.exe`, `D:\AI Stuff\x`, `C:\dir with space\`, `a"b`, ""} {
+		if got := windowsFields(windowsWord(w) + " tail"); len(got) != 2 || got[0] != w {
+			t.Errorf("windowsWord(%q) = %s reads back as %q", w, windowsWord(w), got)
+		}
+	}
+}
