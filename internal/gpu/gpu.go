@@ -320,7 +320,9 @@ func mergeProcs(procs []Proc, dedicated map[int]uint64, names map[int]string) []
 	out := make([]Proc, 0, len(procs)+len(dedicated))
 	for _, p := range procs {
 		listed[p.PID] = true
-		if compositor(p.Name) {
+		// nvidia-smi names dwm.exe "[Insufficient Permissions]"; the
+		// process table names it either way.
+		if compositor(p.Name) || compositor(names[p.PID]) {
 			continue
 		}
 		if p.Used == 0 {

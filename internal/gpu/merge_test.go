@@ -185,3 +185,23 @@ func TestMergeProcsWindowsDesktop(t *testing.T) {
 		t.Fatalf("mergeProcs = %+v, want %+v", got, want)
 	}
 }
+
+// TestMergeProcsUnnamedCompositor: nvidia-smi cannot open dwm.exe, even
+// from an elevated shell, and lists it as "[Insufficient Permissions]".
+// The process table still names it, so it stays out like a named one
+// instead of reading as a stowaway holding the whole card.
+func TestMergeProcsUnnamedCompositor(t *testing.T) {
+	procs := []Proc{
+		{PID: 668, Name: "[Insufficient Permissions]"},
+		{PID: 30068, Name: `C:\comfy\python.exe`},
+	}
+	dedicated := map[int]uint64{
+		668:   24564 * MiB, // capped to the card's total
+		30068: 7766 * MiB,
+	}
+	names := map[int]string{668: "dwm.exe", 30068: "python.exe"}
+	want := []Proc{{PID: 30068, Name: `C:\comfy\python.exe`, Used: 7766 * MiB}}
+	if got := mergeProcs(procs, dedicated, names); !reflect.DeepEqual(got, want) {
+		t.Fatalf("mergeProcs = %+v, want %+v", got, want)
+	}
+}
