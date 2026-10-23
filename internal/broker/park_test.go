@@ -350,6 +350,42 @@ func TestResumeGrantsTheParkedLease(t *testing.T) {
 	}
 }
 
+// A whole-card lease (no needs, as ComfyUI runs) resumes too: the resumed
+// lease is still in the lease table while it waits, and it must not wait
+// for its own memory to leave the card.
+func TestResumeGrantsAWholeCardParkedLease(t *testing.T) {
+	tree := parkTree(100, 101)
+	b, c, _ := parkSetup(t, tree, 16*GiB, 0)
+	l := must(t, acquire(b, Request{Engine: "comfyui", Priority: Batch}))
+	l.Attach(100)
+	c.set(gpu.Proc{PID: 101, Name: "comfyui-engine", Used: 8 * GiB})
+	b.Tick(context.Background())
+
+	w := acquire(b, Request{Engine: "chat", Priority: Interactive})
+	pending(t, w)
+	drained(t, l)
+	if ok, why := l.Park(); !ok {
+		t.Fatalf("park refused: %s", why)
+	}
+	c.set(gpu.Proc{PID: 101, Name: "comfyui-engine", Used: 470 << 20})
+	l.Parked()
+	b.Tick(context.Background())
+	must(t, w).Release()
+	b.Tick(context.Background())
+
+	if err := b.Resume("comfyui"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-l.Resumed():
+	case <-time.After(time.Second):
+		t.Fatalf("the resumed whole-card lease was never granted: %+v", b.Status().Waiting)
+	}
+	if st := b.Status(); len(st.Leases) != 1 || st.Leases[0].State != "active" {
+		t.Fatalf("leases = %+v", st.Leases)
+	}
+}
+
 // Park and resume cycle as often as switches need: the resume signal is one
 // token per grant, sent again on the next cycle, and never a closed
 // channel that would double-close on the second one.

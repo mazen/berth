@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1191,7 +1192,10 @@ func (c cardBudget) avail() uint64   { return sat(c.ceiling(), c.held) }
 // evaluate decides whether w fits now. If not, it returns why and which
 // holders to drain; no victims means draining would not help, so w waits.
 func (b *Broker) evaluate(w *lease, now time.Time) (bool, string, []*lease) {
-	hs := b.holders()
+	// A resumed park waits in the queue while it is still in the lease
+	// table; it is never its own holder, or a whole-card resume waits for
+	// its own memory to leave the card.
+	hs := slices.DeleteFunc(b.holders(), func(h *lease) bool { return h == w })
 	budget := cardBudget{
 		total:    b.snap.Total,
 		reserve:  b.cfg.Reserve,
