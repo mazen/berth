@@ -62,6 +62,31 @@ func TestRenderModelPathsWithNoRootsWritesAnEmptySection(t *testing.T) {
 	}
 }
 
+// The install's own models folder is ComfyUI's default store: it scans it
+// already, by folder. Written again under every key, every dropdown would list
+// the whole tree (loras\x.safetensors under VAE, and so on), so it is left out.
+func TestWriteModelPathsLeavesOutTheInstallsOwnModelsFolder(t *testing.T) {
+	dir := t.TempDir()
+	inst := Install{Name: "comfyui", Path: filepath.Join(dir, "ComfyUI")}
+	own := filepath.Join(inst.Path, "models")
+	shared := filepath.Join(dir, "library")
+	for _, d := range []string{own, shared} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteModelPaths(inst, []string{own, shared, own + string(filepath.Separator)}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(inst.Path, "extra_model_paths.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != RenderModelPaths([]string{shared}) {
+		t.Errorf("want only the shared root, got:\n%s", raw)
+	}
+}
+
 func TestWriteModelPathsWritesIntoTheInstallDirectory(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "models")

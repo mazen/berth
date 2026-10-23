@@ -56,10 +56,29 @@ func RenderModelPaths(roots []string) string {
 }
 
 // WriteModelPaths writes <install>/extra_model_paths.yaml, the file ComfyUI
-// loads at start for the node's model roots.
+// loads at start for the node's model roots. The install's own models folder
+// is left out: ComfyUI scans it by folder already, and listed again under
+// every key it would put the whole tree into every loader's list.
 func WriteModelPaths(inst Install, roots []string) error {
 	if err := os.MkdirAll(inst.Path, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(inst.Path, "extra_model_paths.yaml"), []byte(RenderModelPaths(roots)), 0o644)
+	own, _ := filepath.Abs(filepath.Join(inst.Path, "models"))
+	kept := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if a, err := filepath.Abs(r); err == nil && samePath(a, own) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return os.WriteFile(filepath.Join(inst.Path, "extra_model_paths.yaml"), []byte(RenderModelPaths(kept)), 0o644)
+}
+
+// samePath compares two absolute paths the way the filesystem does: case
+// folds on Windows, where D:\AI\ComfyUI\Models is the same folder.
+func samePath(a, b string) bool {
+	if filepath.Separator == '\\' {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
